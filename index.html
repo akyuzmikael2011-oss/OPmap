@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>City Info Map</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+}
+
+#map {
+    height: 100vh;
+    width: 100%;
+}
+
+.sidebar {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 280px;
+    background: rgba(0,0,0,0.85);
+    color: white;
+    padding: 15px;
+    border-radius: 12px;
+    z-index: 1000;
+}
+
+.sidebar h2 {
+    margin-top: 0;
+}
+
+input, button {
+    width: 100%;
+    padding: 8px;
+    margin-top: 5px;
+    border-radius: 6px;
+    border: none;
+}
+
+button {
+    background: #007bff;
+    color: white;
+    cursor: pointer;
+}
+
+.category {
+    margin-top: 10px;
+    padding: 8px;
+    background: #222;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.category:hover {
+    background: #444;
+}
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div class="sidebar">
+    <h2>City Info</h2>
+
+    <input type="text" id="cityInput" placeholder="Stadt eingeben">
+    <button onclick="searchCity()">Suchen</button>
+
+    <div class="category" onclick="loadData('transport')">🚍 ÖPNV</div>
+    <div class="category" onclick="loadData('hospital')">🏥 Krankenhäuser</div>
+    <div class="category" onclick="loadData('districts')">🏙️ Stadtteile</div>
+</div>
+
+<script>
+let map = L.map('map').setView([51.5, 7.4], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap'
+}).addTo(map);
+
+let markers = [];
+
+// Stadt suchen
+async function searchCity() {
+    let city = document.getElementById("cityInput").value;
+
+    let url = `https://nominatim.openstreetmap.org/search?format=json&q=${city}`;
+
+    let res = await fetch(url);
+    let data = await res.json();
+
+    if (data.length > 0) {
+        let lat = data[0].lat;
+        let lon = data[0].lon;
+
+        map.setView([lat, lon], 13);
+
+        clearMarkers();
+        let marker = L.marker([lat, lon]).addTo(map)
+            .bindPopup(city).openPopup();
+
+        markers.push(marker);
+    }
+}
+
+// Marker löschen
+function clearMarkers() {
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+}
+
+// Daten laden (Overpass API)
+async function loadData(type) {
+    let center = map.getCenter();
+    let query = "";
+
+    if (type === "transport") {
+        query = `
+        [out:json];
+        (
+          node["highway"="bus_stop"](around:2000,${center.lat},${center.lng});
+          node["railway"="station"](around:3000,${center.lat},${center.lng});
+        );
+        out;
+        `;
+    }
+
+    if (type === "hospital") {
+        query = `
+        [out:json];
+        node["amenity"="hospital"](around:5000,${center.lat},${center.lng});
+        out;
+        `;
+    }
+
+    if (type === "districts") {
+        query = `
+        [out:json];
+        relation["boundary"="administrative"](around:5000,${center.lat},${center.lng});
+        out center;
+        `;
+    }
+
+    let url = "https://overpass-api.de/api/interpreter";
+
+    let res = await fetch(url, {
+        method: "POST",
+        body: query
+    });
+
+    let data = await res.json();
+
+    clearMarkers();
+
+    data.elements.forEach(el => {
+        let lat = el.lat || el.center.lat;
+        let lon = el.lon || el.center.lon;
+
+        let name = el.tags?.name || "Unbekannt";
+
+        let marker = L.marker([lat, lon])
+            .addTo(map)
+            .bindPopup(name);
+
+        markers.push(marker);
+    });
+}
+</script>
+
+</body>
+</html>
