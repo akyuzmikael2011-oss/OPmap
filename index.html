@@ -2,130 +2,231 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>City Map</title>
+<title>City Intelligence</title>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
-body { margin: 0; font-family: Arial; }
-#map { height: 100vh; }
+body {
+  margin: 0;
+  font-family: system-ui;
+  background: #0f172a;
+}
 
-#sidebar {
+/* Map */
+#map {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+
+/* Glass UI */
+#panel {
   position: absolute;
   top: 20px;
   left: 20px;
-  width: 300px;
-  padding: 15px;
+  width: 320px;
+  padding: 18px;
 
-  backdrop-filter: blur(10px);
-  background: rgba(255,255,255,0.2);
-  border-radius: 12px;
-  color: black;
+  backdrop-filter: blur(20px);
+  background: rgba(255,255,255,0.08);
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: white;
 }
 
+/* Input */
 input {
   width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  margin-bottom: 15px;
+
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+
+/* Sections */
+.box {
+  margin-top: 10px;
   padding: 10px;
-  margin-bottom: 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
 }
 </style>
 </head>
 
 <body>
 
-<div id="sidebar">
+<div id="panel">
   <input id="city" placeholder="Stadt eingeben..." />
-  <div><b>Bürgermeister:</b> <span id="mayor">-</span></div>
-  <div><b>ÖPNV:</b> <span id="transport">-</span></div>
-  <div><b>Shops:</b> <span id="shops">-</span></div>
+
+  <div class="box">
+    <b>Bürgermeister:</b>
+    <div id="mayor">-</div>
+  </div>
+
+  <div class="box">
+    <b>ÖPNV:</b>
+    <div id="transport">-</div>
+  </div>
+
+  <div class="box">
+    <b>Geschäfte:</b>
+    <div id="shops">-</div>
+  </div>
 </div>
 
 <div id="map"></div>
 
 <script>
-let map = L.map('map').setView([51.5, 7.45], 10);
+// INIT MAP
+const map = L.map('map').setView([51.5, 7.45], 10);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+.addTo(map);
 
+// STATE
 let marker;
 let shopLayer = L.layerGroup().addTo(map);
 let transportLayer = L.layerGroup().addTo(map);
 
+// SEARCH
 document.getElementById("city").addEventListener("keydown", async (e) => {
   if (e.key !== "Enter") return;
 
-  let city = e.target.value;
+  const city = e.target.value.trim();
+  if (!city) return;
+
+  resetUI();
 
   try {
-
     // GEO
-    let geo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${city}`);
-    let geoData = await geo.json();
+    const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${city}`);
+    const geo = await geoRes.json();
 
-    if (!geoData[0]) {
-      alert("Nicht gefunden");
-      return;
-    }
+    if (!geo[0]) throw "Stadt nicht gefunden";
 
-    let lat = +geoData[0].lat;
-    let lon = +geoData[0].lon;
+    const lat = +geo[0].lat;
+    const lon = +geo[0].lon;
 
     map.setView([lat, lon], 13);
 
     if (marker) map.removeLayer(marker);
     marker = L.marker([lat, lon]).addTo(map);
 
-    // RESET
-    shopLayer.clearLayers();
-    transportLayer.clearLayers();
+    // PARALLEL REQUESTS
+    await Promise.all([
+      loadMayor(city),
+      loadShops(lat, lon),
+      loadTransport(lat, lon)
+    ]);
 
-    // SHOPS
-    let shopRes = await fetch("https://overpass-api.de/api/interpreter", {
+  } catch (err) {
+    alert(err);
+  }
+});
+
+// RESET
+function resetUI() {
+  document.getElementById("mayor").innerText = "Lade...";
+  document.getElementById("transport").innerText = "Lade...";
+  document.getElementById("shops").innerText = "Lade...";
+
+  shopLayer.clearLayers();
+  transportLayer.clearLayers();
+}
+
+// WIKIDATA MAYOR (clean)
+async function loadMayor(city) {
+  try {
+    // Wikipedia → Wikidata ID
+    const wiki = await fetch(`https://de.wikipedia.org/w/api.php?action=query&format=json&origin=*&titles=${city}&prop=pageprops`);
+    const wikiData = await wiki.json();
+
+    const page = Object.values(wikiData.query.pages)[0];
+    const id = page.pageprops?.wikibase_item;
+
+    if (!id) throw "Keine Wikidata-ID";
+
+    // Wikidata Entity
+    const entityRes = await fetch(`https://www.wikidata.org/wiki/Special:EntityData/${id}.json`);
+    const entityData = await entityRes.json();
+
+    const entity = entityData.entities[id];
+    const mayorClaim = entity.claims?.P6;
+
+    if (!mayorClaim) throw "Kein Bürgermeister";
+
+    const mayorId = mayorClaim[0].mainsnak.datavalue.value.id;
+
+    // Bürgermeister Name
+    const mayorRes = await fetch(`https://www.wikidata.org/wiki/Special:EntityData/${mayorId}.json`);
+    const mayorData = await mayorRes.json();
+
+    const mayorEntity = mayorData.entities[mayorId];
+
+    document.getElementById("mayor").innerText =
+      mayorEntity.labels.de?.value ||
+      mayorEntity.labels.en?.value ||
+      "Unbekannt";
+
+  } catch {
+    document.getElementById("mayor").innerText = "Nicht verfügbar";
+  }
+}
+
+// SHOPS
+async function loadShops(lat, lon) {
+  try {
+    const res = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       body: `[out:json];node["shop"](around:3000,${lat},${lon});out;`
     });
 
-    let shopData = await shopRes.json();
+    const data = await res.json();
 
-    shopData.elements.slice(0, 100).forEach(s => {
+    data.elements.slice(0, 100).forEach(s => {
       if (s.lat) {
-        L.circleMarker([s.lat, s.lon], {radius: 3})
+        L.circleMarker([s.lat, s.lon], { radius: 3 })
           .addTo(shopLayer);
       }
     });
 
-    document.getElementById("shops").innerText = shopData.elements.length;
+    document.getElementById("shops").innerText =
+      data.elements.length + " gefunden";
 
-    // ÖPNV (Bus Stops)
-    let transportRes = await fetch("https://overpass-api.de/api/interpreter", {
+  } catch {
+    document.getElementById("shops").innerText = "Fehler";
+  }
+}
+
+// ÖPNV
+async function loadTransport(lat, lon) {
+  try {
+    const res = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       body: `[out:json];node["highway"="bus_stop"](around:3000,${lat},${lon});out;`
     });
 
-    let transportData = await transportRes.json();
+    const data = await res.json();
 
-    transportData.elements.slice(0, 100).forEach(t => {
+    data.elements.slice(0, 100).forEach(t => {
       if (t.lat) {
-        L.circleMarker([t.lat, t.lon], {
-          radius: 4
-        }).addTo(transportLayer);
+        L.circleMarker([t.lat, t.lon], { radius: 4 })
+          .addTo(transportLayer);
       }
     });
 
     document.getElementById("transport").innerText =
-      transportData.elements.length + " Haltestellen";
+      data.elements.length + " Haltestellen";
 
-    // Bürgermeister (einfach fallback)
-    document.getElementById("mayor").innerText =
-      "Siehe Wikipedia (nicht exakt abrufbar ohne Wikidata API)";
-
-  } catch (err) {
-    console.error(err);
-    alert("Fehler beim Laden");
+  } catch {
+    document.getElementById("transport").innerText = "Fehler";
   }
-});
+}
 </script>
 
 </body>
