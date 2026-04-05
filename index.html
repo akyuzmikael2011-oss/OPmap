@@ -2,40 +2,74 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>City Info Map</title>
+<title>City Intelligence Map</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
 <style>
+* { box-sizing: border-box; }
+
 body {
   margin: 0;
-  display: flex;
-  font-family: Arial;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
 }
 
-#sidebar {
-  width: 320px;
-  background: #111;
-  color: white;
-  padding: 15px;
-  overflow-y: auto;
-}
-
+/* Map */
 #map {
-  flex: 1;
-  height: 100vh;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
+/* Glass Sidebar */
+#sidebar {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 340px;
+  padding: 20px;
+
+  backdrop-filter: blur(18px);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.15);
+
+  color: white;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+}
+
+/* Input */
 input {
   width: 100%;
-  padding: 10px;
-  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: 12px;
   border: none;
+  outline: none;
+  margin-bottom: 15px;
+
+  background: rgba(255,255,255,0.15);
+  color: white;
 }
 
+/* Sections */
 .section {
-  margin-top: 15px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+}
+
+.label {
+  font-weight: bold;
+  opacity: 0.7;
+}
+
+.value {
+  margin-top: 5px;
 }
 </style>
 </head>
@@ -43,38 +77,41 @@ input {
 <body>
 
 <div id="sidebar">
-  <h2>Stadt Info</h2>
+  <h2>City Info</h2>
 
   <input id="cityInput" placeholder="Stadt eingeben..." />
 
   <div class="section">
-    <b>Bürgermeister:</b>
-    <div id="mayor">-</div>
+    <div class="label">Bürgermeister</div>
+    <div id="mayor" class="value">-</div>
   </div>
 
   <div class="section">
-    <b>ÖPNV:</b>
-    <div id="transport">-</div>
+    <div class="label">ÖPNV</div>
+    <div id="transport" class="value">-</div>
   </div>
 
   <div class="section">
-    <b>Geschäfte (OSM):</b>
-    <div id="shops">-</div>
+    <div class="label">Geschäfte</div>
+    <div id="shops" class="value">-</div>
   </div>
 </div>
 
 <div id="map"></div>
 
 <script>
-// Map
-var map = L.map('map').setView([51.5, 7.45], 10);
+let map = L.map('map').setView([51.5, 7.45], 10);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap'
 }).addTo(map);
 
+// GLOBAL STATE (wichtig!)
+let currentMarker = null;
+let currentShopLayer = null;
+
 // Enter Event
-document.getElementById("cityInput").addEventListener("keypress", function(e) {
+document.getElementById("cityInput").addEventListener("keydown", function(e) {
   if (e.key === "Enter") {
     loadCity(this.value);
   }
@@ -82,56 +119,80 @@ document.getElementById("cityInput").addEventListener("keypress", function(e) {
 
 async function loadCity(city) {
 
-  // 1. Koordinaten holen (Nominatim)
-  let geo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${city}`);
-  let geoData = await geo.json();
-
-  if (!geoData[0]) return alert("Stadt nicht gefunden");
-
-  let lat = geoData[0].lat;
-  let lon = geoData[0].lon;
-
-  map.setView([lat, lon], 13);
-
-  // Marker
-  L.marker([lat, lon]).addTo(map);
-
-  // 2. Wikipedia Infos
   try {
-    let wiki = await fetch(`https://de.wikipedia.org/api/rest_v1/page/summary/${city}`);
-    let wikiData = await wiki.json();
 
-    let text = wikiData.extract || "";
+    // UI reset
+    document.getElementById("mayor").innerText = "Lade...";
+    document.getElementById("transport").innerText = "Lade...";
+    document.getElementById("shops").innerText = "Lade...";
 
-    // Bürgermeister rausfiltern (simple heuristic)
-    let mayor = text.match(/Bürgermeister.*?\./);
+    // 1. Geocoding
+    let geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${city}`);
+    let geoData = await geoRes.json();
 
-    document.getElementById("mayor").innerText = mayor ? mayor[0] : "Nicht gefunden";
-    document.getElementById("transport").innerText = "Infos aus Wikipedia prüfen";
+    if (!geoData[0]) throw "Stadt nicht gefunden";
 
-  } catch {
-    document.getElementById("mayor").innerText = "Fehler";
+    let lat = parseFloat(geoData[0].lat);
+    let lon = parseFloat(geoData[0].lon);
+
+    map.setView([lat, lon], 13);
+
+    // alten Marker entfernen
+    if (currentMarker) map.removeLayer(currentMarker);
+
+    currentMarker = L.marker([lat, lon]).addTo(map);
+
+    // 2. Wikipedia
+    try {
+      let wiki = await fetch(`https://de.wikipedia.org/api/rest_v1/page/summary/${city}`);
+      let data = await wiki.json();
+
+      let mayorMatch = data.extract?.match(/Bürgermeister.*?\./);
+
+      document.getElementById("mayor").innerText =
+        mayorMatch ? mayorMatch[0] : "Nicht gefunden";
+
+      document.getElementById("transport").innerText =
+        data.extract?.includes("Verkehr") ? "Infos vorhanden (Wikipedia)" : "Keine Daten";
+
+    } catch {
+      document.getElementById("mayor").innerText = "Fehler";
+    }
+
+    // 3. Shops
+    if (currentShopLayer) map.removeLayer(currentShopLayer);
+
+    let query = `
+      [out:json];
+      node["shop"](around:4000,${lat},${lon});
+      out;
+    `;
+
+    let res = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      body: query
+    });
+
+    let shopData = await res.json();
+
+    currentShopLayer = L.layerGroup();
+
+    shopData.elements.slice(0, 50).forEach(shop => {
+      if (shop.lat && shop.lon) {
+        L.circleMarker([shop.lat, shop.lon], {
+          radius: 4
+        }).addTo(currentShopLayer);
+      }
+    });
+
+    currentShopLayer.addTo(map);
+
+    document.getElementById("shops").innerText =
+      shopData.elements.length + " gefunden";
+
+  } catch (err) {
+    alert("Fehler: " + err);
   }
-
-  // 3. Shops via Overpass API
-  let query = `
-  [out:json];
-  (
-    node["shop"](around:3000,${lat},${lon});
-  );
-  out;
-  `;
-
-  let res = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    body: query
-  });
-
-  let data = await res.json();
-
-  document.getElementById("shops").innerText =
-    data.elements.length + " Geschäfte gefunden";
-
 }
 </script>
 
