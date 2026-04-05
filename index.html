@@ -4,173 +4,134 @@
 <meta charset="UTF-8">
 <title>City Info Map</title>
 
-<!-- Leaflet -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
 <style>
 body {
-    margin: 0;
-    font-family: Arial, sans-serif;
+  margin: 0;
+  display: flex;
+  font-family: Arial;
+}
+
+#sidebar {
+  width: 320px;
+  background: #111;
+  color: white;
+  padding: 15px;
+  overflow-y: auto;
 }
 
 #map {
-    height: 100vh;
-    width: 100%;
+  flex: 1;
+  height: 100vh;
 }
 
-.sidebar {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    width: 280px;
-    background: rgba(0,0,0,0.85);
-    color: white;
-    padding: 15px;
-    border-radius: 12px;
-    z-index: 1000;
+input {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: none;
 }
 
-.sidebar h2 {
-    margin-top: 0;
-}
-
-input, button {
-    width: 100%;
-    padding: 8px;
-    margin-top: 5px;
-    border-radius: 6px;
-    border: none;
-}
-
-button {
-    background: #007bff;
-    color: white;
-    cursor: pointer;
-}
-
-.category {
-    margin-top: 10px;
-    padding: 8px;
-    background: #222;
-    border-radius: 6px;
-    cursor: pointer;
-}
-
-.category:hover {
-    background: #444;
+.section {
+  margin-top: 15px;
 }
 </style>
 </head>
 
 <body>
 
-<div id="map"></div>
+<div id="sidebar">
+  <h2>Stadt Info</h2>
 
-<div class="sidebar">
-    <h2>City Info</h2>
+  <input id="cityInput" placeholder="Stadt eingeben..." />
 
-    <input type="text" id="cityInput" placeholder="Stadt eingeben">
-    <button onclick="searchCity()">Suchen</button>
+  <div class="section">
+    <b>Bürgermeister:</b>
+    <div id="mayor">-</div>
+  </div>
 
-    <div class="category" onclick="loadData('transport')">🚍 ÖPNV</div>
-    <div class="category" onclick="loadData('hospital')">🏥 Krankenhäuser</div>
-    <div class="category" onclick="loadData('districts')">🏙️ Stadtteile</div>
+  <div class="section">
+    <b>ÖPNV:</b>
+    <div id="transport">-</div>
+  </div>
+
+  <div class="section">
+    <b>Geschäfte (OSM):</b>
+    <div id="shops">-</div>
+  </div>
 </div>
 
+<div id="map"></div>
+
 <script>
-let map = L.map('map').setView([51.5, 7.4], 13);
+// Map
+var map = L.map('map').setView([51.5, 7.45], 10);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap'
+  attribution: '© OpenStreetMap'
 }).addTo(map);
 
-let markers = [];
+// Enter Event
+document.getElementById("cityInput").addEventListener("keypress", function(e) {
+  if (e.key === "Enter") {
+    loadCity(this.value);
+  }
+});
 
-// Stadt suchen
-async function searchCity() {
-    let city = document.getElementById("cityInput").value;
+async function loadCity(city) {
 
-    let url = `https://nominatim.openstreetmap.org/search?format=json&q=${city}`;
+  // 1. Koordinaten holen (Nominatim)
+  let geo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${city}`);
+  let geoData = await geo.json();
 
-    let res = await fetch(url);
-    let data = await res.json();
+  if (!geoData[0]) return alert("Stadt nicht gefunden");
 
-    if (data.length > 0) {
-        let lat = data[0].lat;
-        let lon = data[0].lon;
+  let lat = geoData[0].lat;
+  let lon = geoData[0].lon;
 
-        map.setView([lat, lon], 13);
+  map.setView([lat, lon], 13);
 
-        clearMarkers();
-        let marker = L.marker([lat, lon]).addTo(map)
-            .bindPopup(city).openPopup();
+  // Marker
+  L.marker([lat, lon]).addTo(map);
 
-        markers.push(marker);
-    }
-}
+  // 2. Wikipedia Infos
+  try {
+    let wiki = await fetch(`https://de.wikipedia.org/api/rest_v1/page/summary/${city}`);
+    let wikiData = await wiki.json();
 
-// Marker löschen
-function clearMarkers() {
-    markers.forEach(m => map.removeLayer(m));
-    markers = [];
-}
+    let text = wikiData.extract || "";
 
-// Daten laden (Overpass API)
-async function loadData(type) {
-    let center = map.getCenter();
-    let query = "";
+    // Bürgermeister rausfiltern (simple heuristic)
+    let mayor = text.match(/Bürgermeister.*?\./);
 
-    if (type === "transport") {
-        query = `
-        [out:json];
-        (
-          node["highway"="bus_stop"](around:2000,${center.lat},${center.lng});
-          node["railway"="station"](around:3000,${center.lat},${center.lng});
-        );
-        out;
-        `;
-    }
+    document.getElementById("mayor").innerText = mayor ? mayor[0] : "Nicht gefunden";
+    document.getElementById("transport").innerText = "Infos aus Wikipedia prüfen";
 
-    if (type === "hospital") {
-        query = `
-        [out:json];
-        node["amenity"="hospital"](around:5000,${center.lat},${center.lng});
-        out;
-        `;
-    }
+  } catch {
+    document.getElementById("mayor").innerText = "Fehler";
+  }
 
-    if (type === "districts") {
-        query = `
-        [out:json];
-        relation["boundary"="administrative"](around:5000,${center.lat},${center.lng});
-        out center;
-        `;
-    }
+  // 3. Shops via Overpass API
+  let query = `
+  [out:json];
+  (
+    node["shop"](around:3000,${lat},${lon});
+  );
+  out;
+  `;
 
-    let url = "https://overpass-api.de/api/interpreter";
+  let res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    body: query
+  });
 
-    let res = await fetch(url, {
-        method: "POST",
-        body: query
-    });
+  let data = await res.json();
 
-    let data = await res.json();
+  document.getElementById("shops").innerText =
+    data.elements.length + " Geschäfte gefunden";
 
-    clearMarkers();
-
-    data.elements.forEach(el => {
-        let lat = el.lat || el.center.lat;
-        let lon = el.lon || el.center.lon;
-
-        let name = el.tags?.name || "Unbekannt";
-
-        let marker = L.marker([lat, lon])
-            .addTo(map)
-            .bindPopup(name);
-
-        markers.push(marker);
-    });
 }
 </script>
 
